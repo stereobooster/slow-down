@@ -3,12 +3,13 @@ if %w(development test).include?(ENV["RACK_ENV"])
   Dotenv.load
 end
 
-require "slow_down/version"
-require "slow_down/group"
+require "lock_down/version"
+require "lock_down/group"
 
-module SlowDown
+module LockDown
   module_function
 
+  ResourceLocked = Class.new(StandardError)
   Timeout = Class.new(StandardError)
   ConfigError = Class.new(StandardError)
 
@@ -24,12 +25,19 @@ module SlowDown
     Group.all
   end
 
+  # group, timeout, options
   def run(*args, &block)
-    find_or_create_group(*args).run(&block)
-  end
+    if args[0].is_a?(Hash)
+      options = args[0]
+      group_name = options.delete(:group) || :default
+      timeout = options.delete(:timeout)
+    else
+      options = args[2] || {}
+      group_name = args[0] || :default
+      timeout = args[1]
+    end
 
-  def free?(*args)
-    find_or_create_group(*args).free?
+    Group.find_or_create(group_name, options).run(timeout, &block)
   end
 
   def reset(group_name = :default)
@@ -38,10 +46,11 @@ module SlowDown
     end
   end
 
+  # group_name, options
   def find_or_create_group(*args)
     if args[0].is_a?(Hash)
-      group_name = :default
       options    = args[0]
+      group_name = options.delete(:group) || :default
     else
       group_name = args[0] || :default
       options    = args[1] || {}

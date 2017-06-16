@@ -1,17 +1,17 @@
 # coding: utf-8
 lib = File.expand_path("../lib", __FILE__)
 $LOAD_PATH.unshift(lib) unless $LOAD_PATH.include?(lib)
-require "slow_down/version"
+require "lock_down/version"
 
 Gem::Specification.new do |spec|
-  spec.name          = "slow_down"
-  spec.version       = SlowDown::VERSION
+  spec.name          = "lock_down"
+  spec.version       = LockDown::VERSION
   spec.authors       = ["Florin Lipan"]
   spec.email         = ["lipanski@gmail.com"]
 
   spec.summary       = %q{A centralized Redis-based lock to help you wait on throttled resources}
   spec.description   = %q{A centralized Redis-based lock to help you wait on throttled resources}
-  spec.homepage      = "https://github.com/lipanski/slow_down"
+  spec.homepage      = "https://github.com/lipanski/lock_down"
   spec.license       = "MIT"
 
   spec.files         = `git ls-files -z`.split("\x0").reject { |f| f.match(%r{^(test|spec|features)/}) }

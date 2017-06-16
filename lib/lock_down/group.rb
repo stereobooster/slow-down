@@ -1,6 +1,7 @@
-require "slow_down/configuration"
+require "securerandom"
+require "lock_down/configuration"
 
-module SlowDown
+module LockDown
   class Group
     def self.all
       @groups || {}
@@ -42,31 +43,29 @@ module SlowDown
       @config = Configuration.new({ lock_namespace: name }.merge(options))
     end
 
-    def run
-      expires_at, iteration = Time.now + config.timeout, 0
+    def run(timeout = nil)
+      expires_at, iteration = Time.now + config.acquire_timeout, 0
       config.logger.info(name) { "Run attempt initiatied, times out at #{expires_at}" }
 
       begin
-        return yield if free?
+        lock_token = lock(timeout)
+
+        # p lock_token && lock_token[:key]
+
+        if lock_token
+          begin
+            return yield
+          ensure
+            unlock(lock_token[:key], lock_token[:lockid])
+          end
+        else
+          # raise ResourceLocked if iteration >= config.retries
+        end
+
         wait(iteration += 1)
       end until Time.now > expires_at
 
-      config.logger.info(name) { "Run attempt timed out" }
-      if config.raise_on_timeout
-        config.logger.error(name) { "Timeout error raised" }
-        raise Timeout
-      end
-    end
-
-    def free?
-      config.locks.each do |key|
-        if config.redis.set(key, 1, px: config.milliseconds_per_request_per_lock, nx: true)
-          config.logger.info(name) { "Lock #{key} was acquired for #{config.milliseconds_per_request_per_lock}ms" }
-          return true
-        end
-      end
-
-      false
+      raise Timeout
     end
 
     def reset
@@ -78,6 +77,25 @@ module SlowDown
     end
 
     private
+
+    def lock(timeout)
+      ttl = ((timeout || config.lock_timeout) * 1000).round
+      lockid = SecureRandom.hex(20)
+      config.locks.each do |key|
+        if config.redis.client.call([:set, key, lockid, :nx, :px, ttl])
+          config.logger.info(name) { "Lock #{key} was acquired for #{ttl}ms" }
+          return { key: key, lockid: lockid }
+        end
+      end
+
+      return false
+    end
+
+    def unlock(key, lockid)
+      if config.redis.client.call([:get, key]) == lockid
+        config.redis.client.call([:del, key])
+      end
+    end
 
     def wait(iteration)
       config.logger.debug(name) { "Sleeping for #{config.seconds_per_retry(iteration) * 1000}ms" }
