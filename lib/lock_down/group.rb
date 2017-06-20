@@ -1,5 +1,6 @@
 require "securerandom"
 require "lock_down/configuration"
+# require 'concurrent'
 
 module LockDown
   class Group
@@ -50,12 +51,14 @@ module LockDown
       begin
         lock_token = lock(timeout)
 
-        # p lock_token && lock_token[:key]
+        # puts lock_token && lock_token[:key]
 
         if lock_token
           begin
-            return yield
-          ensure
+            res = yield
+            unlock(lock_token[:key], lock_token[:lockid])
+            return res
+          rescue Exception
             unlock(lock_token[:key], lock_token[:lockid])
           end
         else
@@ -66,10 +69,16 @@ module LockDown
       end until Time.now > expires_at
 
       raise Timeout
+    rescue Redis::TimeoutError
+      yield
     end
 
     def reset
-      config.locks.each { |key| config.redis.del(key) }
+      config.locks.each do |key|
+        config.connection_pool.with do |redis|
+          redis.del(key)
+        end
+      end
     end
 
     def remove
@@ -81,10 +90,13 @@ module LockDown
     def lock(timeout)
       ttl = ((timeout || config.lock_timeout) * 1000).round
       lockid = SecureRandom.hex(20)
-      config.locks.each do |key|
-        if config.redis.client.call([:set, key, lockid, :nx, :px, ttl])
-          config.logger.info(name) { "Lock #{key} was acquired for #{ttl}ms" }
-          return { key: key, lockid: lockid }
+      # $stderr.puts "lock #{ttl} #{lockid}\n"
+      config.connection_pool.with do |redis|
+        config.locks.each do |key|
+          if redis.client.call([:set, key, lockid, :nx, :px, ttl])
+            config.logger.info(name) { "Lock #{key} was acquired for #{ttl}ms" }
+            return { key: key, lockid: lockid }
+          end
         end
       end
 
@@ -92,8 +104,10 @@ module LockDown
     end
 
     def unlock(key, lockid)
-      if config.redis.client.call([:get, key]) == lockid
-        config.redis.client.call([:del, key])
+      config.connection_pool.with do |redis|
+        if redis.call([:get, key]) == lockid
+          redis.call([:del, key])
+        end
       end
     end
 

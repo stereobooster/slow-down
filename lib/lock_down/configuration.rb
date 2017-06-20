@@ -1,9 +1,14 @@
 require "logger"
 require "redis"
+require "connection_pool"
 
 module LockDown
   class Configuration
     CONCURRENCY_MULTIPLIER = 1
+
+    def self.global_connection_pool
+      @connection_pool ||= ConnectionPool.new(size: 20, timeout: 0.5) { Redis.new(url: ENV.fetch("REDIS_URL")) }
+    end
 
     DEFAULTS = {
       lock_timeout: 60,
@@ -42,8 +47,8 @@ module LockDown
       end
     end
 
-    def redis
-      @redis ||= @options[:redis] || Redis.new(url: redis_url || ENV.fetch("REDIS_URL"))
+    def connection_pool
+      Configuration.global_connection_pool
     end
 
     def concurrency
@@ -62,7 +67,6 @@ module LockDown
     end
 
     def invalidate
-      @redis = nil
       @log_path = nil
       @log_level = nil
       @concurrency = nil
