@@ -38,16 +38,16 @@ module LockDown
           return yield
         end
 
-        if lock_token
+        if lock_token || retries == 0 || acquire_timeout == 0
           # acquired lock, breaking the wait loop
           break
-        else
+        elsif
           # sleep till next try
           wait(iteration += 1)
         end
-      end until Time.now > expires_at
+      end until retries >= iteration || Time.now > expires_at
 
-      # didn't manage to acquire lock for the given time
+      # didn't manage to acquire lock in the given time
       raise Timeout unless lock_token
 
       begin
@@ -105,13 +105,8 @@ module LockDown
     end
 
     def wait(iteration)
-      LockDown.logger.debug(name) { "Sleeping for #{seconds_per_retry(iteration) * 1000}ms" }
-      sleep(seconds_per_retry(iteration))
-    end
-
-    def seconds_per_retry(retry_count)
-      return 0 if (retries == 0)
-      acquire_timeout.to_f / retries
+      return if retries == 0 || acquire_timeout == 0
+      sleep(acquire_timeout.to_f / retries)
     end
   end
 end
