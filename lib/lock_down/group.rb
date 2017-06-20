@@ -45,7 +45,7 @@ module LockDown
           # sleep till next try
           wait(iteration += 1)
         end
-      end until retries >= iteration || Time.now > expires_at
+      end until iteration > retries || Time.now > expires_at
 
       # didn't manage to acquire lock in the given time
       raise Timeout unless lock_token
@@ -78,7 +78,9 @@ module LockDown
 
     def lock(timeout)
       ttl = ((timeout || lock_timeout) * 1000).round
-      lockid = SecureRandom.hex(20)
+      # hex is not the most effective way to encode data
+      # use base32 or something similar
+      lockid = SecureRandom.hex(16)
       LockDown.connection_pool.with do |redis|
         locks.each do |key|
           if redis.client.call([:set, key, lockid, :nx, :px, ttl])
