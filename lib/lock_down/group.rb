@@ -1,100 +1,88 @@
 require "securerandom"
-require "lock_down/configuration"
-# require 'concurrent'
 
 module LockDown
   class Group
-    def self.all
-      @groups || {}
-    end
-
-    def self.find(name)
-      all[name]
-    end
-
-    def self.create(name, options = {})
-      @groups ||= {}
-      @groups[name] = Group.new(name, options)
-    end
-
-    def self.find_or_create(name, options = {})
-      if all[name] && !options.empty?
-        all[name].config.logger.error(name) { "Group #{name} has already been configured elsewhere" }
-        fail ConfigError, "Group #{name} has already been configured elsewhere - you may not override configurations"
-      end
-
-      all[name] || create(name, options)
-    end
-
-    def self.remove(group_name)
-      return unless group = Group.find(group_name)
-
-      group.reset
-      @groups.delete(group_name)
-    end
-
-    def self.remove_all
-      all.each_value(&:remove)
-    end
-
-    attr_reader :name, :config
+    attr_reader :name
 
     def initialize(name, options = {})
       @name = name
-      @config = Configuration.new({ lock_namespace: name }.merge(options))
+      @options = DEFAULTS.merge(options)
+    end
+
+    DEFAULTS = {
+      concurrency: nil,
+      lock_timeout: 60,
+      acquire_timeout: 0,
+      retries: 0,
+    }
+
+    DEFAULTS.each do |key, default_value|
+      define_method(key) do
+        @options[key] || default_value
+      end
+
+      define_method("#{key}=") do |value|
+        @options[key] = value
+      end
     end
 
     def run(timeout = nil)
-      expires_at, iteration = Time.now + config.acquire_timeout, 0
-      config.logger.info(name) { "Run attempt initiatied, times out at #{expires_at}" }
+      expires_at, iteration = Time.now + acquire_timeout, 0
+      lock_token = nil
 
       begin
-        lock_token = lock(timeout)
-
-        # puts lock_token && lock_token[:key]
-
-        if lock_token
-          begin
-            res = yield
-            unlock(lock_token[:key], lock_token[:lockid])
-            return res
-          rescue Exception
-            unlock(lock_token[:key], lock_token[:lockid])
-          end
-        else
-          # raise ResourceLocked if iteration >= config.retries
+        begin
+          lock_token = lock(timeout)
+        rescue Redis::TimeoutError
+          # can not connect to Redis execute given code as is
+          return yield
         end
 
-        wait(iteration += 1)
+        if lock_token
+          # acquired lock, breaking the wait loop
+          break
+        else
+          # sleep till next try
+          wait(iteration += 1)
+        end
       end until Time.now > expires_at
 
-      raise Timeout
-    rescue Redis::TimeoutError
-      yield
+      # didn't manage to acquire lock for the given time
+      raise Timeout unless lock_token
+
+      begin
+        res = yield
+        unlock(lock_token)
+        return res
+      rescue Exception
+        unlock(lock_token)
+        raise
+      end
     end
 
     def reset
-      config.locks.each do |key|
-        config.connection_pool.with do |redis|
+      locks.each do |key|
+        LockDown.connection_pool.with do |redis|
           redis.del(key)
         end
       end
     end
 
-    def remove
-      Group.remove(@name)
-    end
-
     private
 
+    def locks
+      @locks ||= concurrency.times.map do |i|
+        [Config.instance.redis_namespace, "#{name}_#{i}"].compact.join(":")
+      end
+    end
+
     def lock(timeout)
-      ttl = ((timeout || config.lock_timeout) * 1000).round
+      ttl = ((timeout || lock_timeout) * 1000).round
       lockid = SecureRandom.hex(20)
-      # $stderr.puts "lock #{ttl} #{lockid}\n"
-      config.connection_pool.with do |redis|
-        config.locks.each do |key|
+      LockDown.connection_pool.with do |redis|
+        locks.each do |key|
           if redis.client.call([:set, key, lockid, :nx, :px, ttl])
-            config.logger.info(name) { "Lock #{key} was acquired for #{ttl}ms" }
+            LockDown.logger.info(name) { "Lock #{key} was acquired for #{ttl}ms" }
             return { key: key, lockid: lockid }
           end
         end
@@ -103,17 +91,27 @@ module LockDown
       return false
     end
 
-    def unlock(key, lockid)
-      config.connection_pool.with do |redis|
+    def unlock(lock_token)
+      key = lock_token.fetch(:key)
+      lockid = lock_token.fetch(:lockid)
+      LockDown.connection_pool.with do |redis|
+        # comparing lockid for case if lock was taken by another instance
         if redis.call([:get, key]) == lockid
           redis.call([:del, key])
         end
       end
+    rescue Redis::TimeoutError
+      # ignore this error, we made our best trying to unlock
     end
 
     def wait(iteration)
-      config.logger.debug(name) { "Sleeping for #{config.seconds_per_retry(iteration) * 1000}ms" }
-      sleep(config.seconds_per_retry(iteration))
+      LockDown.logger.debug(name) { "Sleeping for #{seconds_per_retry(iteration) * 1000}ms" }
+      sleep(seconds_per_retry(iteration))
+    end
+
+    def seconds_per_retry(retry_count)
+      return 0 if (retries == 0)
+      acquire_timeout.to_f / retries
     end
   end
 end

@@ -92,9 +92,6 @@ LockDown.config do |c|
   # Individual groups will overwrite this with the group name.
   c.lock_namespace = :default
 
-  # Set this to a path or file descriptor in order to log to file.
-  c.log_path = STDOUT
-
   # By default, the LockDown logger is disabled.
   # Set this to Logger::DEBUG, Logger::INFO or Logger::ERROR for logging various
   # runtime information.

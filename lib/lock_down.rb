@@ -1,28 +1,72 @@
-if %w(development test).include?(ENV["RACK_ENV"])
-  require "dotenv"
-  Dotenv.load
-end
+require "redis"
+require "connection_pool"
+require "logger"
 
 require "lock_down/version"
 require "lock_down/group"
+require "lock_down/group_store"
 
 module LockDown
   module_function
 
-  ResourceLocked = Class.new(StandardError)
   Timeout = Class.new(StandardError)
   ConfigError = Class.new(StandardError)
 
-  def config(group_name = :default)
-    group = Group.find_or_create(group_name)
+  class Config
+    include Singleton
 
-    group.config.tap do |c|
-      yield(c) if block_given?
+    attr_accessor :connection_pool,
+      :connection_pool_timeout,
+      :redis_url,
+      :redis_namespace,
+      :pool_size,
+      :logger
+
+    def initialize
+      self.redis_namespace = 'lock_down'
+      self.pool_size = 25
+      self.connection_pool_timeout = 0.5
+      self.logger = Logger.new($stdout).tap do |l|
+        l.formatter = proc do |severity, time, group_name, message|
+          "#{time},#{severity},##{Process.pid},#{group_name}: #{message}\n"
+        end
+      end
+    end
+  end
+
+  def configure
+    config = Config.instance
+    yield config
+
+    unless config.redis_url || config.connection_pool
+      raise ArgumentError, "Provide redis_url or connection_pool"
+    end
+
+    unless config.connection_pool
+      config.connection_pool = ConnectionPool.new(size: config.pool_size, timeout: config.connection_pool_timeout) do
+        Redis.new(url: config.redis_url)
+      end
+    end
+  end
+
+  def self.logger
+    Config.instance.logger
+  end
+
+  def self.connection_pool
+    Config.instance.connection_pool
+  end
+
+  def config(group_name = :default)
+    group = GroupStore.find_or_create(group_name)
+
+    group.tap do |group|
+      yield(group) if block_given?
     end
   end
 
   def groups
-    Group.all
+    GroupStore.all
   end
 
   # group, timeout, options
@@ -37,12 +81,12 @@ module LockDown
       timeout = args[1]
     end
 
-    Group.find_or_create(group_name, options).run(timeout, &block)
+    GroupStore.find_or_create(group_name, options).run(timeout, &block)
   end
 
   def reset(group_name = :default)
-    if group = Group.find(group_name)
-      group.reset
+    if group = GroupStore.find(group_name)
+      GroupStore.reset
     end
   end
 
@@ -56,6 +100,6 @@ module LockDown
       options    = args[1] || {}
     end
 
-    Group.find_or_create(group_name, options)
+    GroupStore.find_or_create(group_name, options)
   end
 end
