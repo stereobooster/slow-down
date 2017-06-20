@@ -20,8 +20,8 @@ class TestMultipleGroups < MiniTest::Test
   end
 
   def test_grouped_runs_with_concurency
-    LockDown.config(:c) { |c| c.concurrency = 1 }
-    LockDown.config(:d) { |c| c.concurrency = 4 }
+    LockDown.group(:c) { |c| c.concurrency = 1 }
+    LockDown.group(:d) { |c| c.concurrency = 4 }
 
     c_counter, d_counter = Queue.new, Queue.new
     c_error, d_error = Queue.new, Queue.new

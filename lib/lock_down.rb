@@ -57,11 +57,11 @@ module LockDown
     Config.instance.connection_pool
   end
 
-  def config(group_name = :default)
+  def group(group_name = :default)
     group = GroupStore.find_or_create(group_name)
 
     group.tap do |group|
-      yield(group) if block_given?
+      yield(group)
     end
   end
 
@@ -86,7 +86,7 @@ module LockDown
 
   def reset(group_name = :default)
     if group = GroupStore.find(group_name)
-      GroupStore.reset
+      group.reset
     end
   end
 
