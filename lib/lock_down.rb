@@ -1,3 +1,4 @@
+require "singleton"
 require "redis"
 require "connection_pool"
 require "logger"
@@ -13,7 +14,7 @@ module LockDown
   ConfigError = Class.new(StandardError)
 
   class Config
-    include Singleton
+    include ::Singleton
 
     attr_accessor :connection_pool,
       :connection_pool_timeout,
